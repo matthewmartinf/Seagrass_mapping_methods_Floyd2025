@@ -85,7 +85,7 @@ var clipToCol = function(image){
 
 // Define variables
 var aoi = ;                     // Polygon area of interest
-var hazeDeepWater = ;           //Add here geometries to sample deep water areas
+var hazeDeepWater = ;           // Add here geometries to sample deep water areas
 var seagrass = ;                // Seagrass training sites
 var non_seagrass = ;            // Non-seagrass training sites
 var validation = ;              // Validation data
