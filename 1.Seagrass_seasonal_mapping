@@ -1,0 +1,183 @@
+// Pre-processing and classification of Sentinel 2 data for seagrass mapping
+// Author: Matthew Floyd, Contact: Matthew.J.floyd@northumbria.ac.uk
+
+// We would like to acknowledge the methods used here were developed by 
+// a network of collaborators not directly involved in this work.
+
+//--------------------------------------------------------------------------------
+// 0. Define functions
+//--------------------------------------------------------------------------------
+
+// Function to to rescale Sen2 values
+function divide10000(image){
+  return image.divide(10000);
+}
+
+// Function to apply apply cloud mask using the Sentinel-2 QA band.
+function maskS2clouds(image) {
+  var qa = image.select('QA60');
+
+  // Bits 10 and 11 are clouds and cirrus, respectively.
+  var cloudBitMask = ee.Number(2).pow(10).int();
+  var cirrusBitMask = ee.Number(2).pow(11).int();
+
+  // Both flags should be set to zero, indicating clear conditions.
+  var mask = qa.bitwiseAnd(cloudBitMask).eq(0).and(
+             qa.bitwiseAnd(cirrusBitMask).eq(0));
+
+  // Return the masked and scaled data.
+  return image.updateMask(mask).divide(10000);
+}
+
+// Function for Atmospheric correction using dark pixel subtraction aiming to reduce path radiance
+function hazeRemovalDeepwater(image) {
+  // Select the relevant bands - can be amended depending on dataset used
+  image = image.select(['B1', 'B2', 'B3', 'B4', 'B8'])
+  var reducers = ee.Reducer.mean().combine({
+    reducer2: ee.Reducer.stdDev(),
+    sharedInputs: true
+  });
+  
+  // Calculate Mean and Standard deviation by intersecting the image with deep water polygon
+  var stats = image.reduceRegion({
+    reducer: reducers,
+    bestEffort: true,
+    geometry: hazeDeepWater,
+    scale: 10,
+    maxPixels: 1e12
+  });
+  
+  // Convert the statistics into an image and concaternate it to the original image
+  image = ee.Image.cat([image, stats.toImage()])
+  
+  // Apply the expression
+  return image.expression(
+    'image - ( mean - (2 * std) )', {
+      'image': image.select(['B1', 'B2', 'B3', 'B4', 'B8']),
+      'mean': image.select(['B1_mean', 'B2_mean', 'B3_mean', 'B4_mean', 'B8_mean']),
+      'std': image.select(['B1_stdDev', 'B2_stdDev', 'B3_stdDev', 'B4_stdDev', 'B8_stdDev'])
+  });
+}
+
+// Function to shift an image to have non negative values
+function makePositive(image){
+  
+  // Calculate minimum of image
+  var min = image.reduceRegion({
+    reducer: ee.Reducer.min(),
+    geometry: aoi,
+    scale: 10,
+    maxPixels: 1e12
+  });
+  
+  // Subtract min from image, to relocate the min to 0
+  return image.subtract(min.toImage(image.bandNames()))
+}
+
+// Function to clip an image collection
+var clipToCol = function(image){
+  return image.clip(aoi);
+};
+
+//--------------------------------------------------------------------------------
+// 1. Import and process data
+//--------------------------------------------------------------------------------
+
+// Define variables
+var aoi = ;                     // Polygon area of interest
+var hazeDeepWater = ;           //Add here geometries to sample deep water areas
+var seagrass = ;                // Seagrass training sites
+var non_seagrass = ;            // Non-seagrass training sites
+var validation = ;              // Validation data
+var start_date1 = 'XXXX-XX-XX'; // Start date of data filtering
+var end_date1 = 'XXXX-XX-XX';   // End date of data filtering
+
+var criteria = ee.Filter.and(
+    ee.Filter.bounds(aoi), ee.Filter.date(start_date1, end_date1), ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE',50));
+var quartReducer = ee.Reducer.percentile([20])
+
+// Define the composite image
+var composite = ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED')
+  .filter(criteria) 
+  .map(clipToCol)
+  .reduce(quartReducer)
+  .select(['B1_p20', 'B2_p20', 'B3_p20', 'B4_p20', 'B8_p20', 'B11_p20'], 
+  ['B1', 'B2', 'B3', 'B4', 'B8', 'B11']);
+
+// Use the MNDWI index to separate water and land
+var MNDWI = composite.expression(
+    '(GREEN-SWIR)/(GREEN+SWIR)', {
+      'SWIR': composite.select('B11'),
+      'GREEN': composite.select('B3')
+});
+var land = MNDWI.gt(0.2);
+var composite = divide10000(composite.updateMask(land));
+
+//Apply atmospheric correction
+var S2_Cloud_Land_Atm = hazeRemovalDeepwater(composite)
+
+// Αpply Rrs(λ) 
+var Rrs = makePositive(S2_Cloud_Land_Atm).expression(
+  'Atm/3.14159265359', {
+  'Atm': S2_Cloud_Land_Atm
+});
+Map.addLayer(Rrs, {bands: ['B3', 'B2', 'B1'], min: 0, max: 0.1}, 'Sentinel-2_Above_Surface_Reflectance')
+
+//--------------------------------------------------------------------------------
+// 2. Run classification
+//--------------------------------------------------------------------------------
+
+// Merge your training data into one variable
+var training = non_seagrass.merge(seagrass) 
+
+// Overlay the point on the image to get training data for classification
+var training1 = Rrs.sampleRegions({
+  collection: training,
+  properties: ['landcover'],
+  scale: 10,
+  tileScale: 16
+});
+
+// train the classifier
+var classifier1 = ee.Classifier.smileRandomForest(50)
+.train({
+features: training1,  
+classProperty: 'landcover',
+inputProperties: Rrs.bandNames()
+});
+
+// Classify the images
+var classified1 = Rrs.classify(classifier1);
+
+// visualise the composite
+var rgbVis = {
+  min: 0.0,
+  max: 0.1,
+  bands: ['B3', 'B2', 'B1'], 
+};
+
+// Display classigied image 
+Map.addLayer(classified1.selfMask(), {min: 0, max: 1, palette: ['green']}, 'RF Classification 1');
+
+//--------------------------------------------------------------------------------
+// 3. Accuracy assessment
+//--------------------------------------------------------------------------------
+
+var test1 = classified1.sampleRegions({
+collection: training,
+properties: ['landcover'],
+tileScale: 16,
+scale: 10,
+});
+	
+var testConfusionMatrix1 = test1.errorMatrix('landcover', 'classification')
+print('Confusion Matrix1', testConfusionMatrix1);
+print('Test Accuracy1', testConfusionMatrix1.accuracy());
+	
+// Export the image, specifying scale and region.
+Export.image.toDrive({
+  image: classified1,
+  description: 'class',
+  scale: 10,
+  region: aoi
+});
