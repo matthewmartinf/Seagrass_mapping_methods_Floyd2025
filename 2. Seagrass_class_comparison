@@ -1,0 +1,135 @@
+// Classification of Sentinel 2 using varying numbers of training data
+// Author: Matthew Floyd, Contact: Matthew.J.floyd@northumbria.ac.uk
+
+// We would like to acknowledge the methods used here were developed by 
+// a network of collaborators not directly involved in this work.
+
+//--------------------------------------------------------------------------------
+// 0. Define functions
+//--------------------------------------------------------------------------------
+
+// Create a function to add the 'cover' property
+function addCoverPropertySeagrass(feature) {
+  return feature.set('cover', 1);
+}
+
+function addCoverPropertyNonSeagrass(feature) {
+  return feature.set('cover', 0);
+}
+
+//--------------------------------------------------------------------------------
+// 1. Define classifier parameters
+//--------------------------------------------------------------------------------
+var resultsCollection = ee.FeatureCollection([]); //Save results here
+var numberValues = [5, 25, 50, 250, 500, 1250, 1875, 2500, 3750, 5000, 7500,10000]; // range of training pixel inputs
+var Classifier_ID = 'SVM'
+var RF_trees_no = 'na'
+var SVM_CG = 'SVMC0.1G100'
+var cost_set = 0.1
+var gamma_set = 100
+
+// Loop through different values of 'number'
+for (var i = 0; i < numberValues.length; i++) {
+  var number = numberValues[i];
+
+//--------------------------------------------------------------------------------
+// 2. Set up the workflow
+//--------------------------------------------------------------------------------
+var aoi =  ;                           // your defined area of interest as a polygon
+var Rrs =  ;                           // Any pre-processes Sentinel-2 image for your aoi
+var seagrass_polygon_training = ;      // polygons of your seagrass training areas
+var non_seagrass_polygon_training =  ; // polygons of your non-seagrass training areas
+var validationGcp =  ;                 // your validation sites combined
+var seed_number = (number*2)/10;       // seed number is changed for each iteration
+
+// We are only interested in predicting at the validation locations for this workflow
+var clipped_Rrs_validation = Rrs.clip(validationGcp)
+
+// Create a random points layer with a minimum distance of 10 meters for seagrass
+var randomPointsSeagrass = ee.FeatureCollection.randomPoints({
+  region: seagrass_polygon_training,
+  points: number,
+  seed: seed_number, 
+  maxError: 1,
+});
+
+// Apply the addCoverProperty function to each point in the feature collection
+var seagrass_train = randomPointsSeagrass.map(addCoverPropertySeagrass);
+
+// Create a random points layer with a minimum distance of 10 meters for non-seagrass
+var randomPointsNonSeagrass = ee.FeatureCollection.randomPoints({
+  region: non_seagrass_polygon_training,
+  points: number,
+  seed: seed_number, 
+  maxError: 1, 
+});
+
+// Apply the addCoverProperty function to each point in the feature collection
+var non_seagrass_train = randomPointsNonSeagrass.map(addCoverPropertyNonSeagrass);
+
+// Merge training points into one variable
+var training = seagrass_train.merge(non_seagrass_train)
+
+// Overlay the points on the image to get training data
+var training1 = Rrs.sampleRegions({
+  collection: training,
+  properties: ['cover'],
+  scale: 10,
+  tileScale: 1
+});
+
+//--------------------------------------------------------------------------------
+// 3. Train the classifier, in this case we run a SVM classifier
+//--------------------------------------------------------------------------------
+
+var classifier1 = ee.Classifier //.smileRandomForest(RF_trees_no)
+.libsvm({ kernelType: 'RBF',	gamma: gamma_set, cost: cost_set})
+//.smileCart()
+.train({
+features: training1,  
+classProperty: 'cover',
+inputProperties: Rrs.bandNames()
+});
+
+// Classify the images
+var Classified_accuracy_assessment = clipped_Rrs_validation.classify(classifier1);
+
+//--------------------------------------------------------------------------------
+// 4. Assess accuracy
+//--------------------------------------------------------------------------------
+
+var test1 = Classified_accuracy_assessment.sampleRegions({
+collection: validationGcp,
+properties: ['cover'],
+tileScale: 1,
+scale: 10,
+});
+
+var trainMatrix = test1.errorMatrix('cover', 'classification');
+
+// Calculate accuracy and create a feature to store the results
+var accuracy = trainMatrix.accuracy();
+var confusionMatrix = trainMatrix.array();
+  
+//  Create a feature to store the results
+  var resultFeature = ee.Feature(null, {
+    'Classifier': Classifier_ID,
+    'RF_Trees_number': RF_trees_no,
+    'SVM_cost_gamma': SVM_CG,
+    'SeedNumber': seed_number,
+    'TotalTrainingPoints': number * 2,
+    'Accuracy': accuracy,
+    'ConfusionMatrix': confusionMatrix
+    });
+  
+  // Add the result feature to the results collection
+  resultsCollection = resultsCollection.merge(resultFeature);
+}
+
+// Export the results to Google Drive as a CSV file
+Export.table.toDrive({
+  collection: resultsCollection,
+  description: 'classification_results'+ Classifier_ID + RF_trees_no + SVM_CG,
+  fileFormat: 'CSV',
+  selectors: ['SeedNumber', 'TotalTrainingPoints', 'Accuracy', 'ConfusionMatrix']
+});
