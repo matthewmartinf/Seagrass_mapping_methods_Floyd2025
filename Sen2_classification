@@ -13,7 +13,7 @@
 //--------------------------------------------------------------------------------
 var Rrs =                                               // This is a fully pre-processed Sentinel-2 image of your aoi
 Map.addLayer(Rrs, {}, 'Sentinel-2 image')
-
+var aoi = ;                                             // This is your area of interest as a polygon
 var seagrass_train = ;                                  // Training points for seagrass areas
 var non_seagrass_train = ;                              // Training points for non-seagrass areas
 var training = ;                                        // Merge training points into one variable
@@ -73,7 +73,7 @@ Export.image.toDrive({
   image: rgbComposite,
   description: 'rgb_imageSent',
   scale: 10,
-  region: aoi3,
+  region: aoi,
   fileFormat: 'GeoTIFF',
   maxPixels: 1e10
 });
@@ -82,7 +82,7 @@ Export.image.toDrive({
   image: classified1,
   description: 'ClassSent',
   scale: 10,
-  region: aoi3,
+  region: aoi,
   fileFormat: 'GeoTIFF',
   maxPixels: 1e10
 });
