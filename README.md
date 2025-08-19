@@ -1,6 +1,6 @@
 # Seagrass mapping methods Floyd 2025
 
-This repo contains code associated with "Evaluating methods for high resolution, national-scale seagrass mapping in Google Earth Engine".
+This repo contains code associated with "Evaluating methods for high resolution, national-scale seagrass mapping in Google Earth Engine" by Matthew Floyd, Holly K East, and Andrew J Suggitt. 
 
 The worflows used here apply methods developed by other researchers in the remote sensing community, their work is acknowledged and cited in the manuscript. 
 
