@@ -1,0 +1,88 @@
+// Classification of aoi using Sentinel-2 data
+// Author: Matthew Floyd, Contact: Matthew.J.floyd@northumbria.ac.uk
+
+// We would like to acknowledge the methods used here were developed by 
+// a network of collaborators not directly involved in this work.
+
+//--------------------------------------------------------------------------------
+// 0. Define functions
+//--------------------------------------------------------------------------------
+
+//--------------------------------------------------------------------------------
+// 1. Define variables
+//--------------------------------------------------------------------------------
+var Rrs =                                               // This is a fully pre-processed Sentinel-2 image of your aoi
+Map.addLayer(Rrs, {}, 'Sentinel-2 image')
+
+var seagrass_train = ;                                  // Training points for seagrass areas
+var non_seagrass_train = ;                              // Training points for non-seagrass areas
+var training = ;                                        // Merge training points into one variable
+var validationGcp = ;                                   // Validation points
+
+//--------------------------------------------------------------------------------
+// 1. Define training workflow
+//--------------------------------------------------------------------------------
+
+// Overlay the point on the image
+var training1 = Rrs.sampleRegions({
+  collection: training,
+  properties: ['cover'],
+  scale: 10 ,
+  tileScale: 2
+});
+
+// train the classifier
+var classifier1 = ee.Classifier.libsvm({ kernelType: 'RBF',	gamma: 1, cost: 1000}) 
+.train({
+features: training1,  
+classProperty: 'cover',
+inputProperties: Rrs.bandNames()
+});
+
+//--------------------------------------------------------------------------------
+// 2. Classify the image
+//--------------------------------------------------------------------------------
+
+// Classify the images
+var classified1 = Rrs.classify(classifier1);
+
+//--------------------------------------------------------------------------------
+// 3. Accuracy assessment
+//--------------------------------------------------------------------------------
+
+var test1 = classified1.sampleRegions({
+collection: validationGcp,
+properties: ['cover'],
+tileScale: 2,
+scale: 10 ,
+});
+
+// Define error matrix
+var testConfusionMatrix1 = test1.errorMatrix('cover', 'classification')
+
+// Print results
+var trainMatrix = test1.errorMatrix('cover', 'classification');
+print('Overall accuracy: ', trainMatrix.accuracy());
+print('Confusion Matrix', trainMatrix,
+      'Producer Accuracy: ', trainMatrix.producersAccuracy(),
+      'Consumer Accuracy: ', trainMatrix.consumersAccuracy());
+
+var rgbComposite = Rrs.visualize({bands: ['B4', 'B3', 'B2']});
+
+Export.image.toDrive({
+  image: rgbComposite,
+  description: 'rgb_imageSent',
+  scale: 10,
+  region: aoi3,
+  fileFormat: 'GeoTIFF',
+  maxPixels: 1e10
+});
+
+Export.image.toDrive({
+  image: classified1,
+  description: 'ClassSent',
+  scale: 10,
+  region: aoi3,
+  fileFormat: 'GeoTIFF',
+  maxPixels: 1e10
+});
